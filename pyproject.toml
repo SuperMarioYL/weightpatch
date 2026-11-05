@@ -26,11 +26,15 @@ dependencies = [
   "rich>=13",
 ]
 
-[project.optional-dependencies]
-test = ["pytest>=8.2"]
+[project.urls]
+Homepage = "https://github.com/SuperMarioYL/weightpatch"
+Repository = "https://github.com/SuperMarioYL/weightpatch"
 
 [project.scripts]
-weightpatch = "weightpatch.cli:app"
+weightpatch = "weightpatch.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8.2"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/weightpatch"]
