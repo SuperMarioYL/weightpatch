@@ -10,12 +10,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `weightpatch diff`: compare two local safetensors checkpoints into a sparse
-  tensor diff with per-tensor digests and changed slice ranges.
-- `weightpatch apply` / `weightpatch revert`: write, verify, apply, stack and
-  revert a `.wpatch` file with pre-image checks and slice-overlap conflicts.
-- `weightpatch screen`: report kept, missing and reshaped edited tensors in a
-  quantized export or a single-file GGUF.
+- Installable `weightpatch` package (`src/` layout) with the `weightpatch`
+  console script and a `python -m weightpatch` entry point.
+- Minimal CLI shell built on typer, exposing `--help` and `--version`. The
+  tensor commands land with the milestones that implement them.
 
 [Unreleased]: https://github.com/SuperMarioYL/weightpatch/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/SuperMarioYL/weightpatch/releases/tag/v0.1.0
