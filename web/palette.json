@@ -1,0 +1,38 @@
+{
+  "mode": "auto",
+  "id": "e656bb-e76a7f-f1acf6-3561becb8244",
+  "identity": "https://github.com/supermarioyl/weightpatch",
+  "primary": "#e656bb",
+  "secondary": "#e76a7f",
+  "highlight": "#f1acf6",
+  "dark": {
+    "bg": "#0a0710",
+    "panel": "#13101c",
+    "code": "#140d1a",
+    "ink": "#fceefd",
+    "muted": "#b29cbc",
+    "line": "#3a1836",
+    "primary": "#e656bb",
+    "secondary": "#e76a7f",
+    "highlight": "#f1acf6",
+    "accent": "#e656bb",
+    "buttonStart": "#c0489d",
+    "buttonEnd": "#bc5667",
+    "buttonText": "#ffffff"
+  },
+  "light": {
+    "bg": "#fef9fd",
+    "panel": "#fef7fc",
+    "code": "#fdf3fa",
+    "ink": "#27162a",
+    "muted": "#725e7f",
+    "line": "#f7cbeb",
+    "primary": "#b74595",
+    "secondary": "#b35263",
+    "highlight": "#8b638e",
+    "accent": "#b74595",
+    "buttonStart": "#c0489d",
+    "buttonEnd": "#bc5667",
+    "buttonText": "#ffffff"
+  }
+}

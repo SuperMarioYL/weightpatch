@@ -1,0 +1,409 @@
+{
+  "schema": 3,
+  "name": "weightpatch",
+  "github": "https://github.com/SuperMarioYL/weightpatch",
+  "palette": "auto",
+  "lang": {
+    "primary": "zh",
+    "toggle": true
+  },
+  "hero": {
+    "eyebrow": {
+      "zh": ".wpatch · 本地、稀疏、内容寻址",
+      "en": ".wpatch · local, sparse, content-addressed"
+    },
+    "headline": {
+      "zh": "把一次权重改动\n写成可回滚的补丁。",
+      "en": "Turn one weight edit\ninto a patch you can revert."
+    },
+    "sub": {
+      "zh": "weightpatch 对两个本地 safetensors 目录跑一次 diff，把改动写成稀疏的 .wpatch；apply 与 revert 按切片重放和撤销，screen 把同一份补丁对到单文件 GGUF 上，只比存在性与形状，报告 kept、missing 或 reshaped。",
+      "en": "weightpatch diffs two local safetensors directories into a sparse .wpatch, replays or undoes the slice edits with apply and revert, and screens the same patch against a single-file GGUF for tensor presence and shape — reporting kept, missing or reshaped."
+    },
+    "href": "#quickstart",
+    "cta": {
+      "zh": "第一次跑通",
+      "en": "Your first run"
+    },
+    "ctaGithub": {
+      "zh": "在 GitHub 查看",
+      "en": "View on GitHub"
+    }
+  },
+  "advantages": [
+    {
+      "title": {
+        "zh": "只存改动切片",
+        "en": "Only the changed slices"
+      },
+      "body": {
+        "zh": "diff 逐张量比较两个目录，未改动的张量只进入计数。对每个改动的张量，补丁记录改动坐标的最小包围盒，而不是整个张量：演示里两个张量各改前 64 行，切片就是那段包围盒。补丁 id 是 sha256(base, parents, edit)，内容寻址；应用时校验的是每个被改张量的 before_sha256，所以只要另一个 base 的这些张量还对得上，同一份补丁也能应用过去。",
+        "en": "diff compares two directories tensor by tensor and lets unchanged tensors contribute only to the count. For each changed tensor the patch records the smallest bounding box around the changed coordinates, not the whole tensor: in the demo two tensors change their first 64 rows, and the slice is exactly that box. The patch id is sha256(base, parents, edit), content-addressed; apply verifies each touched tensor's before_sha256, so the same patch can land on another base whose touched tensors still match."
+      },
+      "chips": ["2 changed · 309 unchanged", "id sha256(base, parents, edit)", "cross-base by pre-image"]
+    },
+    {
+      "title": {
+        "zh": "原始机器字，BF16 逐位往返",
+        "en": "Raw machine words, BF16 round-trips"
+      },
+      "body": {
+        "zh": "BF16 在 numpy 里没有对应 dtype，safetensors 的 numpy 后端会拒绝读取。weightpatch 自己解析 safetensors 头（8 字节小端长度加 JSON 偏移表），按字节区间读取，把 BF16 当作 uint16 字保存和比较，其它 dtype 当作 uint8 字节。整个过程不解码浮点，也不存 numpy float，所以一片 BF16 切片可以逐位还原。",
+        "en": "numpy has no bfloat16 dtype, and the safetensors numpy backend refuses to read BF16. weightpatch parses the safetensors header itself (an 8-byte little-endian length plus a JSON offset map), reads byte ranges, and treats BF16 as uint16 words while every other dtype stays uint8 bytes. Nothing is decoded to float and no numpy float is stored, so a BF16 slice round-trips bit for bit."
+      },
+      "chips": ["BF16 → uint16", "no float decode", "bit-exact slices"]
+    },
+    {
+      "title": {
+        "zh": "写盘之前先验 pre-image",
+        "en": "Pre-images are checked before writing"
+      },
+      "body": {
+        "zh": "apply 在复制任何 shard 之前，先校验每个被改张量当前的摘要与补丁记录的 before_sha256 一致；对不上就退出，输出目录不会被创建。写完之后重新打开输出目录，再次校验每个被改张量的 post-image 摘要。revert 走同一条路径，演示里回滚后的 model.safetensors 与 base 逐字节相同。stack 只按给定顺序应用，链上任何一步对不上都不写盘；同一调用里两个补丁改到重叠切片会被拒绝。",
+        "en": "Before copying any shard, apply checks that each touched tensor's current digest equals the before_sha256 recorded in the patch; on a mismatch it exits and the output directory is never created. After writing, it re-opens the output and verifies each post-image digest. revert takes the same path, and in the demo the reverted model.safetensors is byte-identical to the base. stack applies patches only in the given order and writes nothing if any link disagrees; two patches that touch overlapping slices in one call are refused."
+      },
+      "chips": ["pre-image first", "post-image re-hash", "revert byte-identical"]
+    },
+    {
+      "title": {
+        "zh": "screen 回答的是「还在不在」",
+        "en": "screen answers whether the edit is still there"
+      },
+      "body": {
+        "zh": "screen 对单文件 GGUF 只比存在性和形状：先读 general.architecture，再用 block_count 建 GGML 名称表把 safetensors 名映射成 blk.N.*，最后把 GGUF 的 ne 顺序反转回来再比。映射不到就是 missing，不猜相似字符串；整份架构都映射不到时只报一条 unmapped-arch。对量化后的 safetensors 导出只比存储字节，打包过的导出报 reshaped，并列出同级的 .scales / .biases。它从不说值还在不在——那是 v0.1 没做的事。",
+        "en": "Against a single-file GGUF, screen compares presence and shape only: it reads general.architecture, builds the GGML name map with block_count to translate safetensors names into blk.N.*, then reverses the GGUF ne order before comparing. An unmapped name is missing, never a string-similarity guess; when the whole architecture maps to nothing it reports one unmapped-arch row. Against a quantized safetensors export it compares stored bytes, and a packed export reports reshaped with the sibling .scales / .biases named. It never claims that values survived — v0.1 does not compare them."
+      },
+      "chips": ["GGUF: presence + shape", "safetensors: byte digest", "kept | missing | reshaped"]
+    }
+  ],
+  "demo": {
+    "title": {
+      "zh": "真实录制的一次运行",
+      "en": "One recorded run"
+    },
+    "note": {
+      "zh": "这次运行用的是真实的 Qwen3-0.6B BF16 safetensors（311 个张量、1,503,300,328 字节）和真实的单文件 Qwen3-0.6B-Q8_0.gguf（Q8_0、639,446,688 字节），不是合成夹具。演示里的改动是把两个张量前 64 行的每个原始 BF16 字翻一位，属于字节级切片重写，不是行为调参；这些数字证明的是代码路径与补丁格式，不对模型质量作任何断言。",
+      "en": "This run uses the real Qwen3-0.6B BF16 safetensors (311 tensors, 1,503,300,328 bytes) and the real single-file Qwen3-0.6B-Q8_0.gguf (Q8_0, 639,446,688 bytes), not a synthetic fixture. The edit flips one bit in every raw BF16 word of the first 64 rows of two tensors — a byte-level slice rewrite, not behavioral tuning. The numbers prove the code path and the patch format; they make no claim about model quality."
+    },
+    "source": "https://github.com/SuperMarioYL/weightpatch/blob/main/docs/demo-results.json",
+    "steps": [
+      {
+        "label": {
+          "zh": "造一份被改过的副本",
+          "en": "Make an edited copy"
+        },
+        "body": {
+          "zh": "复制 base 目录，再把两个张量各自前 64 行按原始 BF16 机器字重写，每个字翻一位。没有随机数，也没有浮点解码；同一份 base 永远得到同一份改后摘要。",
+          "en": "Copy the base directory, then rewrite the first 64 rows of two tensors as raw BF16 words with one bit flipped in each word. No randomness and no float decoding; the same base always yields the same post-edit digests."
+        },
+        "image": "/assets/demo-0-light.svg",
+        "imageDark": "/assets/demo-0-dark.svg",
+        "command": "python examples/make_demo_edit.py ./Qwen3-0.6B ./Qwen3-0.6B-neurons",
+        "output": "Qwen3-0.6B-neurons: 311 tensors\n  model.layers.0.self_attn.q_proj.weight  BF16 2048×1024  rows 0:64  sha256 574ebe3b4fcb427b\n  model.layers.12.mlp.down_proj.weight  BF16 1024×3072  rows 0:64  sha256 b603bbfe2b46e3b9"
+      },
+      {
+        "label": {
+          "zh": "diff：只列改动",
+          "en": "diff: changed tensors only"
+        },
+        "body": {
+          "zh": "逐张量比较 base 与改后目录，打印两处切片改动和两侧摘要；另外 309 个张量没有变化。补丁写成为 qwen3-0.6b-neurons.wpatch，id 前缀 d0722f8616bc。",
+          "en": "Compares the base with the edited directory tensor by tensor and prints the two slice edits with both digests; the other 309 tensors are unchanged. The patch is written as qwen3-0.6b-neurons.wpatch with id prefix d0722f8616bc."
+        },
+        "image": "/assets/demo-1-light.svg",
+        "imageDark": "/assets/demo-1-dark.svg",
+        "command": "weightpatch diff ./Qwen3-0.6B ./Qwen3-0.6B-neurons -o qwen3-0.6b-neurons.wpatch",
+        "output": "base    Qwen3-0.6B\ntarget  Qwen3-0.6B-neurons\n\ntensor                                  dtype      shape  slice                before    after\nmodel.layers.0.self_attn.q_proj.weight  BF16   2048×1024  [0:0:64] [1:0:1024]  7592f6e7  574ebe3b\nmodel.layers.12.mlp.down_proj.weight    BF16   1024×3072  [0:0:64] [1:0:3072]  75228753  b603bbfe\n2 changed · 309 unchanged · 0 added · 0 removed\npatch   qwen3-0.6b-neurons.wpatch · d0722f8616bc"
+      },
+      {
+        "label": {
+          "zh": "show：把补丁读回来",
+          "en": "show: read the patch back"
+        },
+        "body": {
+          "zh": "从 .wpatch 读回 manifest，打印完整 id、base 的文件数与张量数、parents、probe 以及切片表。probe 只是作者声明的说法，不会被执行。",
+          "en": "Reads the manifest back from the .wpatch and prints the full id, base file and tensor counts, parents, probe and the slice table. probe is only the author's declared claim; nothing executes it."
+        },
+        "image": "/assets/demo-2-light.svg",
+        "imageDark": "/assets/demo-2-dark.svg",
+        "command": "weightpatch show qwen3-0.6b-neurons.wpatch",
+        "output": "patch   qwen3-0.6b-neurons.wpatch\nid      d0722f8616bcfc05\nbase    1 file(s) · 311 tensor(s)\nparents -\nprobe   declared · (no claim recorded)\n\ntensor                                  dtype      shape  slice                before    after\nmodel.layers.0.self_attn.q_proj.weight  BF16   2048×1024  [0:0:64] [1:0:1024]  7592f6e7  574ebe3b\nmodel.layers.12.mlp.down_proj.weight    BF16   1024×3072  [0:0:64] [1:0:3072]  75228753  b603bbfe\n2 tensor edit(s) · 0 added · 0 removed"
+      },
+      {
+        "label": {
+          "zh": "apply：按切片重放",
+          "en": "apply: replay the slices"
+        },
+        "body": {
+          "zh": "校验每个被改张量的 pre-image 之后，把副本写出到 rebuilt，重新打开并核对 post-image 摘要。",
+          "en": "After verifying every touched tensor's pre-image, it writes the copy to rebuilt, re-opens it and checks the post-image digests."
+        },
+        "image": "/assets/demo-3-light.svg",
+        "imageDark": "/assets/demo-3-dark.svg",
+        "command": "weightpatch apply ./Qwen3-0.6B qwen3-0.6b-neurons.wpatch -o ./rebuilt",
+        "output": "applied qwen3-0.6b-neurons.wpatch · d0722f8616bc → rebuilt\n2 tensor(s) rewritten · post-image verified"
+      },
+      {
+        "label": {
+          "zh": "revert：回到记录前",
+          "en": "revert: back to before the record"
+        },
+        "body": {
+          "zh": "在 rebuilt 上撤销同一份补丁，写出 back；演示记录里回滚后的权重与 base 逐字节相同。",
+          "en": "Undoes the same patch on rebuilt and writes back; in the recorded run the reverted weights are byte-identical to the base."
+        },
+        "image": "/assets/demo-4-light.svg",
+        "imageDark": "/assets/demo-4-dark.svg",
+        "command": "weightpatch revert ./rebuilt qwen3-0.6b-neurons.wpatch -o ./back",
+        "output": "reverted qwen3-0.6b-neurons.wpatch · d0722f8616bc → back\n2 tensor(s) restored · post-image verified"
+      },
+      {
+        "label": {
+          "zh": "screen：对到真实 GGUF",
+          "en": "screen: against a real GGUF"
+        },
+        "body": {
+          "zh": "读 Qwen3-0.6B-Q8_0.gguf 的 general.architecture=qwen3，把两个张量映射到 blk.0.attn_q.weight 与 blk.12.ffn_down.weight，再反转 ne 顺序核对形状。结果是 2 kept，退出码 0；这里只证明张量还在，不比较数值。",
+          "en": "Reads general.architecture=qwen3 from Qwen3-0.6B-Q8_0.gguf, maps the two tensors to blk.0.attn_q.weight and blk.12.ffn_down.weight, then reverses the ne order to check shapes. The result is 2 kept with exit code 0; this shows the tensors are present, not that the values match."
+        },
+        "image": "/assets/demo-5-light.svg",
+        "imageDark": "/assets/demo-5-dark.svg",
+        "command": "weightpatch screen ./Qwen3-0.6B-Q8_0.gguf qwen3-0.6b-neurons.wpatch",
+        "output": "Qwen3-0.6B-Q8_0.gguf · gguf · arch qwen3\n\nkept             model.layers.0.self_attn.q_proj.weight\n                 present as 'blk.0.attn_q.weight'; raw ne 1024×2048 reverses to the recorded\n                 2048×1024 (values not compared)\nkept             model.layers.12.mlp.down_proj.weight\n                 present as 'blk.12.ffn_down.weight'; raw ne 3072×1024 reverses to the recorded\n                 1024×3072 (values not compared)\n\n2 kept · 0 missing · 0 reshaped"
+      }
+    ]
+  },
+  "quickstart": {
+    "title": {
+      "zh": "第一次跑通",
+      "en": "Your first run"
+    },
+    "body": {
+      "zh": "需要 Python 3.12。安装后按顺序跑一遍：先准备 base safetensors，再生成一份改过的副本，然后用 diff 记录、apply/revert 重放，最后用 screen 对到单文件 GGUF。演示用的是真实的 Qwen3-0.6B 与 Qwen3-0.6B-Q8_0.gguf；换成你自己的目录时，命令形状不变。",
+      "en": "Python 3.12 is required. Install, then run in order: prepare a base safetensors directory, make an edited copy, record it with diff, replay with apply/revert, and screen it against a single-file GGUF. The demo uses the real Qwen3-0.6B and Qwen3-0.6B-Q8_0.gguf; the command shapes stay the same with your own directories."
+    },
+    "steps": [
+      {
+        "title": {
+          "zh": "克隆并安装",
+          "en": "Clone and install"
+        },
+        "code": "git clone https://github.com/SuperMarioYL/weightpatch.git\ncd weightpatch\nuv venv --python 3.12\nuv pip install --group dev -e .\nsource .venv/bin/activate\nweightpatch --version"
+      },
+      {
+        "title": {
+          "zh": "取得 base checkpoint",
+          "en": "Get the base checkpoint"
+        },
+        "code": "mkdir -p Qwen3-0.6B\ncurl -fL -o Qwen3-0.6B/model.safetensors \\\n  https://huggingface.co/Qwen/Qwen3-0.6B/resolve/main/model.safetensors"
+      },
+      {
+        "title": {
+          "zh": "造一份改过的副本",
+          "en": "Make an edited copy"
+        },
+        "code": "python examples/make_demo_edit.py ./Qwen3-0.6B ./Qwen3-0.6B-neurons"
+      },
+      {
+        "title": {
+          "zh": "记录并审阅",
+          "en": "Record and review"
+        },
+        "code": "weightpatch diff ./Qwen3-0.6B ./Qwen3-0.6B-neurons -o qwen3-0.6b-neurons.wpatch\nweightpatch show qwen3-0.6b-neurons.wpatch"
+      },
+      {
+        "title": {
+          "zh": "应用与回滚",
+          "en": "Apply and revert"
+        },
+        "code": "weightpatch apply ./Qwen3-0.6B qwen3-0.6b-neurons.wpatch -o ./rebuilt\nweightpatch revert ./rebuilt qwen3-0.6b-neurons.wpatch -o ./back\ncmp ./Qwen3-0.6B/model.safetensors ./back/model.safetensors && echo \"revert is byte-identical\""
+      },
+      {
+        "title": {
+          "zh": "筛查派生的单文件 GGUF",
+          "en": "Screen the derivative GGUF"
+        },
+        "code": "curl -fL -o Qwen3-0.6B-Q8_0.gguf \\\n  https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf\nweightpatch screen ./Qwen3-0.6B-Q8_0.gguf qwen3-0.6b-neurons.wpatch"
+      }
+    ]
+  },
+  "limitations": [
+    {
+      "zh": "GGUF 在 v0.1 只读：不支持写入、重新量化或解量化后比较数值。screen 对 GGUF 只比存在性和形状，kept 不代表权重值仍然一致。",
+      "en": "GGUF is read-only in v0.1: no writing, no requantizing, no dequantize-and-compare. screen checks presence and shape only, so kept does not mean the weight values still agree."
+    },
+    {
+      "zh": "screen 一次只打开一个 .gguf 文件；多分片 GGUF 集合不支持。DeepSeek-V4.1-Flash 这类 10 分片的权重打不开。",
+      "en": "screen opens one .gguf file at a time; split or multi-shard GGUF sets are not supported. A 10-part checkpoint such as DeepSeek-V4.1-Flash cannot be opened."
+    },
+    {
+      "zh": "补丁只为切片改动携带数值。记录在 edit.added / edit.removed 里的张量名没有字节，这类补丁可以 show、可以 screen，不能 apply 或 revert。",
+      "en": "A patch carries values for slice edits only. Names recorded in edit.added / edit.removed have no bytes, so such a patch can be shown and screened but not applied or reverted."
+    },
+    {
+      "zh": "只支持 safetensors：单文件，或带 model.safetensors.index.json 的分片目录。PyTorch .bin / pickle checkpoint 不支持。",
+      "en": "safetensors only: a single file, or a sharded directory with model.safetensors.index.json. PyTorch .bin / pickle checkpoints are not supported."
+    },
+    {
+      "zh": "gguf 未声明的架构整份报 unsupported-arch，名称表解析不出的命名空间整份报 unmapped-arch；screen 不按字符串相似度猜名字。打包过的量化 safetensors 导出只会报 reshaped，不声称值幸存。",
+      "en": "An architecture gguf does not declare reports unsupported-arch for the whole screen, and a namespace the name map cannot resolve reports one unmapped-arch; screen never guesses by string similarity. A packed quantized safetensors export reports reshaped, and no claim is made that values survived."
+    },
+    {
+      "zh": "没有三方合并或交互式冲突解决，也没有 Web UI、账号、托管服务或网络请求。单用户、本地、MIT；不做 benchmark 运行，probe 只记录作者声明的说法，不执行它。",
+      "en": "No three-way merge or interactive conflict resolution, and no web UI, accounts, hosted service or network calls. Single-user, local, MIT; there is no benchmark runner, and probe records the author's declared claim without executing it."
+    }
+  ],
+  "scene": {
+    "kind": "neon-graph",
+    "fallback": "/assets/scene-dark.svg",
+    "fallbackLight": "/assets/scene-light.svg",
+    "caption": {
+      "zh": "首屏是示意粒子图：两份权重目录的差异汇成一份 .wpatch，再分叉到重建、回滚与 GGUF 筛查。真实计数与录制输出在下面的 Demo 里。",
+      "en": "An illustrative particle graph: the difference between two weight directories becomes one .wpatch, then branches into rebuild, revert and a GGUF screen. Exact counts and recorded output are in the demo below."
+    }
+  },
+  "story": {
+    "intro": {
+      "title": {
+        "zh": "改动需要一个交接对象",
+        "en": "An edit needs an object to hand over"
+      },
+      "body": {
+        "zh": "一次神经元编辑或专家裁剪，最后都要经过交接才有人用。常见做法是覆盖原文件、上传一份十几 GB 的新 checkpoint，再附一句说明。接收的人没法审阅改了哪些张量，没法撤销，也没法确认这次改动经过一次量化之后还在不在。weightpatch 把这次交接变成一个文件：稀疏的切片、两侧的摘要、可以重放的 apply 与 revert，以及一份能对到派生产物上的 screen 结果。",
+        "en": "A neuron edit or an expert prune is only useful once someone else can take it over. The usual handoff overwrites the original files, uploads a new checkpoint of many gigabytes, and adds one sentence. The receiver cannot review which tensors changed, cannot undo it, and cannot tell whether the edit survived a later quantization. weightpatch turns that handoff into a file: sparse slices, both digests, a replayable apply and revert, and a screen result you can point at a derivative artifact."
+      }
+    },
+    "sections": [
+      {
+        "title": {
+          "zh": "从两份目录到一份补丁",
+          "en": "From two directories to one patch"
+        },
+        "body": {
+          "zh": "diff 逐张量比较 base 与 derivative 目录，只把改动过的张量留下。每处改动记下最小包围盒切片、两边的整张量摘要，以及切片本身的原始机器字；未改动的张量只参与计数。写出的 .wpatch 是一个 zip：manifest.json 记录 id、base 摘要、parents 和切片清单，values.npz 只装改动切片的 uint16（BF16）或字节（其它 dtype）。apply 与 revert 按同一份切片重放和撤销，stack 按顺序校验 pre-image 链。",
+          "en": "diff compares a base directory with a derivative directory tensor by tensor and keeps only the tensors that changed. Each edit records the smallest bounding-box slice, both full-tensor digests, and the raw machine words of the slice; unchanged tensors only contribute to the count. A .wpatch is a zip: manifest.json holds the id, base digests, parents and slice list, and values.npz holds only the changed slices as uint16 words for BF16 or bytes for other dtypes. apply and revert replay and undo the same slices; stack verifies the pre-image chain in order."
+        },
+        "image": {
+          "light": "/assets/process-light.svg",
+          "dark": "/assets/process-dark.svg",
+          "alt": {
+            "zh": "从 base 与改后目录到 .wpatch，再到应用、回滚与 GGUF 筛查的流程图",
+            "en": "The flow from base and edited directories to a .wpatch, then apply, revert and a GGUF screen"
+          },
+          "mobile": {
+            "light": "/assets/process-mobile-light.svg",
+            "dark": "/assets/process-mobile-dark.svg"
+          }
+        }
+      },
+      {
+        "title": {
+          "zh": "一个进程，五个模块",
+          "en": "One process, five modules"
+        },
+        "body": {
+          "zh": "cli.py 是 typer 命令层；checkpoint.py 自己解析 safetensors 头（8 字节小端长度加 JSON 偏移表），按字节区间流式读取，因为 numpy 没有 bfloat16 类型，safetensors 的 numpy 后端会直接拒绝 BF16；diff.py 在原始字上逐张量比较，算出改动切片的包围盒，并保留两侧整张量摘要；patch.py 负责 .wpatch 的读写、内容寻址 id、apply/revert/stack 和切片重叠检查；screen.py 把补丁对到派生产物上。没有守护进程、数据库或网络调用，状态只在命令行参数与输出目录里。",
+          "en": "cli.py is the typer command layer; checkpoint.py parses the safetensors header itself (an 8-byte little-endian length followed by a JSON offset map) and streams byte ranges, because numpy has no bfloat16 type and the safetensors numpy backend refuses BF16 outright; diff.py compares raw words, computes the bounding box of the changed coordinates and retains both full-tensor digests; patch.py owns .wpatch read/write, the content-addressed id, apply/revert/stack and slice-overlap checks; screen.py maps a patch onto a derivative artifact. There is no daemon, database or network call; state lives only in arguments and output directories."
+        },
+        "image": {
+          "light": "/assets/architecture-light.svg",
+          "dark": "/assets/architecture-dark.svg",
+          "alt": {
+            "zh": "weightpatch 的五个模块与它们在命令行、checkpoint 和产物之间的数据流",
+            "en": "The five weightpatch modules and the data that flows between the CLI, checkpoints and artifacts"
+          },
+          "mobile": {
+            "light": "/assets/architecture-mobile-light.svg",
+            "dark": "/assets/architecture-mobile-dark.svg"
+          }
+        }
+      },
+      {
+        "title": {
+          "zh": "带了什么，要你准备什么",
+          "en": "What ships, what you bring"
+        },
+        "body": {
+          "zh": "v0.1 有六条命令：diff、show、apply、revert、stack、screen；diff/show/screen 支持 --json，screen 在任一改动 missing 或 reshaped 时返回非零，可以直接当发布闸门。你需要 Python 3.12、一个 base safetensors 目录和一份改过的目录（单文件或带 index.json 的分片都行）；要 screen 单文件 GGUF 时再准备那一个 .gguf。不需要 GPU，也不需要 PyTorch。GGUF 只读：screen 只比存在性和形状，不解量化，也不写回。",
+          "en": "v0.1 ships six commands: diff, show, apply, revert, stack and screen; diff/show/screen accept --json, and screen exits non-zero when any edit is missing or reshaped, so it can gate a release. You bring Python 3.12, a base safetensors directory and an edited one (single-file or sharded with index.json); for a GGUF screen, that one .gguf file. No GPU and no PyTorch. GGUF is read-only: screen compares presence and shape, never dequantizes, and never writes back."
+        },
+        "image": {
+          "light": "/assets/integrations-light.svg",
+          "dark": "/assets/integrations-dark.svg",
+          "alt": {
+            "zh": "v0.1 已实现的命令与操作者需要提供的输入",
+            "en": "The commands shipped in v0.1 and the inputs the operator supplies"
+          },
+          "mobile": {
+            "light": "/assets/integrations-mobile-light.svg",
+            "dark": "/assets/integrations-mobile-dark.svg"
+          }
+        }
+      }
+    ],
+    "details": [
+      {
+        "title": {
+          "zh": ".wpatch 里有什么",
+          "en": "What is inside a .wpatch"
+        },
+        "body": {
+          "zh": "一个 zip，两个成员。manifest.json 是补丁的权威描述：id 覆盖 base、parents 与 edit，base 记录每个 shard 的名字、字节数与 sha256，edit.tensors 为每个改动张量记录 dtype、element_size、shape、切片范围、两侧摘要和 values.npz 的键；probe 只保存作者声明的说法。values.npz 只装改动切片的原始机器字，BF16 是 uint16，其它 dtype 是 uint8 字节，没有 numpy float。",
+          "en": "A zip with two members. manifest.json is the authoritative description: the id covers base, parents and edit; base records each shard's name, bytes and sha256; edit.tensors records dtype, element_size, shape, slice ranges, both digests and the values.npz keys for every changed tensor; probe stores only the author's declared claim. values.npz holds just the raw machine words of the changed slices — uint16 for BF16, uint8 bytes for other dtypes, no numpy floats."
+        },
+        "code": "manifest.json\n  id        sha256(base, parents, edit)\n  base      { files: [{name, bytes, sha256}], tensor_count }\n  parents   [id, ...]\n  edit.tensors[].ranges        [[dim, start, end], ...]\n  edit.tensors[].before_sha256 / after_sha256\n  probe     { kind, claim, metrics }\nvalues.npz\n  BF16 -> uint16 words; other dtypes -> uint8 bytes"
+      },
+      {
+        "title": {
+          "zh": "六条命令",
+          "en": "The six commands"
+        },
+        "body": {
+          "zh": "diff 只报告改动的切片；show 打印补丁内容；apply 与 revert 写出副本并按切片写入或还原；stack 接受两个以上补丁，按给定顺序校验并应用；screen 把补丁对到 safetensors 目录或单文件 GGUF。diff/show/screen 带 --json 时输出稳定文档；错误写 stderr，返回 1，参数用错返回 2。",
+          "en": "diff reports only changed slices; show prints the patch contents; apply and revert write a copy and replay or restore the slices; stack takes two or more patches and verifies and applies them in the given order; screen points the patch at a safetensors directory or a single-file GGUF. diff/show/screen emit a stable document with --json; errors go to stderr with exit code 1, and argument misuse exits 2."
+        },
+        "code": "weightpatch diff BASE TARGET -o EDIT.wpatch\nweightpatch show EDIT.wpatch\nweightpatch apply  TARGET EDIT.wpatch -o OUT\nweightpatch revert TARGET EDIT.wpatch -o OUT\nweightpatch stack  TARGET A.wpatch B.wpatch -o OUT\nweightpatch screen SOURCE EDIT.wpatch"
+      },
+      {
+        "title": {
+          "zh": "screen 的三步，顺序不能换",
+          "en": "Three screen steps, in this order"
+        },
+        "body": {
+          "zh": "第一步读 general.architecture；这个 gguf 版本不认识的架构整份报 unsupported-arch，不做名称匹配。第二步用 arch 与 block_count 建 GGML 名称表，把每个 safetensors 名映射过去；映射不到就是 missing，如果一个都映射不到（例如名称表覆盖不到的命名空间），整份只报一条 unmapped-arch，说明这是名称表的缺口，不是逐张量丢失。第三步反转 GGUFReader.shape：那个字段是 GGML 的 ne 顺序，二维矩阵到达时是转置的，直接比较会让每个矩阵都失败。",
+          "en": "Step one reads general.architecture; an architecture this gguf build does not declare reports unsupported-arch for the whole screen, with no name matching attempted. Step two builds the GGML name map from arch and block_count and maps every safetensors name through it; an unmapped name is missing, and when the map resolves none of them (for example a namespace the name table does not cover) the whole screen reports one unmapped-arch row, because that is a name-map gap rather than per-tensor loss. Step three reverses GGUFReader.shape: that field is raw GGML ne order, so every 2-D matrix arrives transposed and comparing it directly would fail for every matrix."
+        }
+      },
+      {
+        "title": {
+          "zh": "演示改的是字节，不是行为",
+          "en": "The demo edits bytes, not behavior"
+        },
+        "body": {
+          "zh": "examples/make_demo_edit.py 复制 base 目录，然后对两个张量的前 64 行逐字翻转 0x0080 这一位。它不训练、不调参，也不跑 benchmark；同一个输入永远得到同一个输出。演示想说明的是 diff 能精确定位切片、apply/revert 能逐字节往返、screen 能在真实 Q8_0 GGUF 上找到映射后的张量——不是这处改动让模型变好或变坏。",
+          "en": "examples/make_demo_edit.py copies the base directory and flips bit 0x0080 in every raw word of the first 64 rows of two tensors. It does not train, tune or run a benchmark, and the same input always produces the same output. The demo is about diff locating a slice exactly, apply/revert round-tripping byte for byte, and screen finding the mapped tensors in a real Q8_0 GGUF — not about this edit making the model better or worse."
+        }
+      }
+    ]
+  },
+  "cta": {
+    "headline": {
+      "zh": "把下一次权重改动写成补丁。",
+      "en": "Make the next weight edit a patch."
+    },
+    "sub": {
+      "zh": "记录、回滚、验证一次切片改动，全部在本地完成。",
+      "en": "Record, revert and verify one slice edit, entirely on your machine."
+    },
+    "button": {
+      "zh": "在 GitHub 查看源码",
+      "en": "Read the source on GitHub"
+    }
+  },
+  "footer": {
+    "tag": {
+      "zh": "面向开放权重 checkpoints 的稀疏补丁。MIT 开源。",
+      "en": "Sparse patches for open-weight checkpoints. MIT-licensed."
+    }
+  }
+}
