@@ -26,6 +26,7 @@ venv/
 CLAUDE.md
 
 # Build scratch
+.zcode/
 PUBLISH_BLOCKED.md
 BUILD_SETUP_NEXT_STEPS.md
 .spawn.*
