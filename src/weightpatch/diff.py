@@ -5,7 +5,9 @@ Each common tensor is compared as raw words (``uint16`` for BF16, opaque
 numpy cannot represent -- compares exactly. Unchanged tensors are dropped; a
 changed tensor records both full-tensor digests, the ``[dim, start, end]``
 ranges of the smallest slab covering every changed element, and the raw
-before/after values of that slab.
+before/after values of that slab. That slab is the axis-aligned bounding box
+of the changed coordinates, so scattered edits stay small instead of widening
+to whole rows.
 
 The emitted manifest follows the plan. Its ``id`` is derived by the writer
 (``patch.py``) from ``(base, parents, edit)``; nothing here mints an id.
@@ -77,6 +79,7 @@ class CheckpointDiff:
     tensors: list[TensorDiff] = field(default_factory=list)
     added: list[str] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)
+    compared: int = 0  # tensors present on both sides, changed or not
 
     def manifest(
         self,
@@ -123,6 +126,7 @@ def diff_checkpoints(
         tensors=changed,
         added=sorted(target_names - base_names),
         removed=sorted(base_names - target_names),
+        compared=len(common),
     )
 
 
@@ -138,8 +142,12 @@ def _diff_tensor(base: Checkpoint, target: Checkpoint, name: str) -> TensorDiff 
 
     before_digest = hashlib.sha256()
     after_digest = hashlib.sha256()
-    first_changed = -1
-    last_changed = -1
+    shape = before_info.shape
+    strides = _flat_strides(shape)
+    # Per-dimension extent of the changed coordinates, [low, high]; high < 0
+    # until the first changed element is seen.
+    extents = [[size, -1] for size in shape]
+    changed = False
     position = 0
     for before_block, after_block in zip(
         base.iter_blocks(name), target.iter_blocks(name)
@@ -149,22 +157,25 @@ def _diff_tensor(base: Checkpoint, target: Checkpoint, name: str) -> TensorDiff 
         differs = before_block != after_block
         if differs.ndim > 1:
             differs = differs.any(axis=-1)
-        if differs.any():
-            indices = np.flatnonzero(differs)
-            if first_changed < 0:
-                first_changed = position + int(indices[0])
-            last_changed = position + int(indices[-1]) + 1
+        indices = np.flatnonzero(differs)
+        if indices.size:
+            changed = True
+            flats = indices + position
+            for dim, (size, stride) in enumerate(zip(shape, strides)):
+                coordinates = (flats // stride) % size
+                extents[dim][0] = min(extents[dim][0], int(coordinates.min()))
+                extents[dim][1] = max(extents[dim][1], int(coordinates.max()))
         position += differs.shape[0]
 
-    if first_changed < 0:
+    if not changed:
         return None
 
-    ranges = _bounding_ranges(before_info.shape, first_changed, last_changed)
+    ranges = [[dim, low, high + 1] for dim, (low, high) in enumerate(extents)]
     return TensorDiff(
         name=name,
         dtype=before_info.dtype,
         element_size=before_info.element_size,
-        shape=before_info.shape,
+        shape=shape,
         ranges=ranges,
         before_sha256=before_digest.hexdigest(),
         after_sha256=after_digest.hexdigest(),
@@ -173,33 +184,9 @@ def _diff_tensor(base: Checkpoint, target: Checkpoint, name: str) -> TensorDiff 
     )
 
 
-def _bounding_ranges(
-    shape: Sequence[int], start: int, stop: int
-) -> list[list[int]]:
-    """Smallest ``[dim, start, end]`` slab covering elements ``[start, stop)``.
-
-    The slab is a superset: elements of the flat run can be scattered once a
-    dimension wraps, and a wrapped dimension is covered in full. Storing both
-    sides' raw values for the slab keeps apply and revert exact either way.
-    """
-    if not shape:
-        return []
+def _flat_strides(shape: Sequence[int]) -> list[int]:
+    """Strides of a row-major flat index over ``shape``."""
     strides = [1] * len(shape)
     for dim in range(len(shape) - 2, -1, -1):
         strides[dim] = strides[dim + 1] * shape[dim + 1]
-
-    last = stop - 1
-    ranges: list[list[int]] = []
-    for dim, (size, stride) in enumerate(zip(shape, strides)):
-        first_row = start // stride
-        last_row = last // stride
-        if last_row - first_row >= size - 1:
-            ranges.append([dim, 0, size])
-            continue
-        first_coordinate = first_row % size
-        last_coordinate = last_row % size
-        if last_coordinate < first_coordinate:
-            ranges.append([dim, 0, size])
-        else:
-            ranges.append([dim, first_coordinate, last_coordinate + 1])
-    return ranges
+    return strides
