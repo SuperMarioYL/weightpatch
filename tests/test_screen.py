@@ -134,6 +134,16 @@ def test_cli_screen_exit_codes(checkpoint_pair, packed_export, patch_file):
     assert document["counts"]["missing"] == 2
 
 
+def test_cli_screen_on_a_gguf_exits_zero(make_gguf, patch_file):
+    path = make_gguf({"blk.0.attn_q.weight": (8, 8), "blk.0.ffn_up.weight": (8, 8)})
+
+    result = runner.invoke(app, ["screen", str(path), str(patch_file)])
+
+    assert result.exit_code == 0, result.output
+    assert "2 kept · 0 missing · 0 reshaped" in result.stdout
+    assert "arch qwen3" in result.stdout
+
+
 def test_cli_screen_exits_non_zero_when_nothing_was_screened(make_checkpoint, tmp_path):
     base = make_checkpoint("base")
     edited = make_checkpoint(

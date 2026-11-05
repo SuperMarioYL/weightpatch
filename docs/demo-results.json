@@ -1,0 +1,130 @@
+{
+  "product": "weightpatch",
+  "version": "0.1.0",
+  "recorded_at": "2026-11-05",
+  "environment": {
+    "python": "3.12.13",
+    "platform": "Darwin-27.2.0-arm64",
+    "dependencies": {
+      "safetensors": "0.8.0",
+      "numpy": "2.5.4",
+      "typer": "0.27.3",
+      "gguf": "0.19.0",
+      "rich": "15.0.0"
+    }
+  },
+  "inputs": {
+    "base_checkpoint": {
+      "source": "https://huggingface.co/Qwen/Qwen3-0.6B",
+      "files": [
+        "model.safetensors"
+      ],
+      "bytes": 1503300328,
+      "sha256": "f47f71177f32bcd101b7573ec9171e6a57f4f4d31148d38e382306f42996874b",
+      "tensors": 311
+    },
+    "derivative_artifact": {
+      "source": "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF",
+      "file": "Qwen3-0.6B-Q8_0.gguf",
+      "quantization": "Q8_0",
+      "bytes": 639446688,
+      "sha256": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031"
+    },
+    "edit": {
+      "script": "examples/make_demo_edit.py",
+      "tensors": [
+        "model.layers.0.self_attn.q_proj.weight",
+        "model.layers.12.mlp.down_proj.weight"
+      ],
+      "slice_rows": 64,
+      "operation": "flip bit 0x0080 in every raw BF16 word of the first 64 rows"
+    }
+  },
+  "steps": [
+    {
+      "command": "python examples/make_demo_edit.py ./Qwen3-0.6B ./Qwen3-0.6B-neurons",
+      "exit_code": 0,
+      "stdout": "Qwen3-0.6B-neurons: 311 tensors\n  model.layers.0.self_attn.q_proj.weight  BF16 2048×1024  rows 0:64  sha256 574ebe3b4fcb427b\n  model.layers.12.mlp.down_proj.weight  BF16 1024×3072  rows 0:64  sha256 b603bbfe2b46e3b9\n"
+    },
+    {
+      "command": "weightpatch diff ./Qwen3-0.6B ./Qwen3-0.6B-neurons -o qwen3-0.6b-neurons.wpatch",
+      "exit_code": 0,
+      "stdout": "base    Qwen3-0.6B\ntarget  Qwen3-0.6B-neurons\n\ntensor                                  dtype      shape  slice                before    after   \nmodel.layers.0.self_attn.q_proj.weight  BF16   2048×1024  [0:0:64] [1:0:1024]  7592f6e7  574ebe3b\nmodel.layers.12.mlp.down_proj.weight    BF16   1024×3072  [0:0:64] [1:0:3072]  75228753  b603bbfe\n2 changed · 309 unchanged · 0 added · 0 removed\npatch   qwen3-0.6b-neurons.wpatch · d0722f8616bc\n"
+    },
+    {
+      "command": "weightpatch show qwen3-0.6b-neurons.wpatch",
+      "exit_code": 0,
+      "stdout": "patch   qwen3-0.6b-neurons.wpatch\nid      d0722f8616bcfc05\nbase    1 file(s) · 311 tensor(s)\nparents -\nprobe   declared · (no claim recorded)\n\ntensor                                  dtype      shape  slice                before    after   \nmodel.layers.0.self_attn.q_proj.weight  BF16   2048×1024  [0:0:64] [1:0:1024]  7592f6e7  574ebe3b\nmodel.layers.12.mlp.down_proj.weight    BF16   1024×3072  [0:0:64] [1:0:3072]  75228753  b603bbfe\n2 tensor edit(s) · 0 added · 0 removed\n"
+    },
+    {
+      "command": "weightpatch apply ./Qwen3-0.6B qwen3-0.6b-neurons.wpatch -o ./rebuilt",
+      "exit_code": 0,
+      "stdout": "applied qwen3-0.6b-neurons.wpatch · d0722f8616bc → rebuilt\n2 tensor(s) rewritten · post-image verified\n"
+    },
+    {
+      "command": "weightpatch revert ./rebuilt qwen3-0.6b-neurons.wpatch -o ./back",
+      "exit_code": 0,
+      "stdout": "reverted qwen3-0.6b-neurons.wpatch · d0722f8616bc → back\n2 tensor(s) restored · post-image verified\n"
+    },
+    {
+      "command": "weightpatch screen ./Qwen3-0.6B-Q8_0.gguf qwen3-0.6b-neurons.wpatch",
+      "exit_code": 0,
+      "stdout": "Qwen3-0.6B-Q8_0.gguf · gguf · arch qwen3\n\nkept             model.layers.0.self_attn.q_proj.weight\n                 present as 'blk.0.attn_q.weight'; raw ne 1024×2048 reverses to the recorded\n                 2048×1024 (values not compared)\nkept             model.layers.12.mlp.down_proj.weight\n                 present as 'blk.12.ffn_down.weight'; raw ne 3072×1024 reverses to the recorded\n                 1024×3072 (values not compared)\n\n2 kept · 0 missing · 0 reshaped\n"
+    }
+  ],
+  "summary": {
+    "changed_tensors": 2,
+    "unchanged_tensors": 309,
+    "added_tensors": 0,
+    "removed_tensors": 0,
+    "patch_id": "d0722f8616bcfc05a80870389ddbf6b279895c4f2eabe12f8fcd0124ea6741dd",
+    "patch_bytes": 838693,
+    "changed_digests": {
+      "model.layers.0.self_attn.q_proj.weight": {
+        "before_sha256": "7592f6e783c400f502653f77d9b483cb03e96c3061af16f538da0d695d21bc53",
+        "after_sha256": "574ebe3b4fcb427b29938c2c15ff77c75e24158dfda8fa421020707d5e307e78",
+        "ranges": [
+          [
+            0,
+            0,
+            64
+          ],
+          [
+            1,
+            0,
+            1024
+          ]
+        ]
+      },
+      "model.layers.12.mlp.down_proj.weight": {
+        "before_sha256": "75228753417862bdb54c80703cdd73551700e042c841b7484cb901a5f8d0d8d9",
+        "after_sha256": "b603bbfe2b46e3b913d626ba48c2ede4dfe4db1b98408898f842adfe5452c261",
+        "ranges": [
+          [
+            0,
+            0,
+            64
+          ],
+          [
+            1,
+            0,
+            3072
+          ]
+        ]
+      }
+    },
+    "revert_byte_identical": true,
+    "screen": {
+      "kept": 2,
+      "missing": 0,
+      "reshaped": 0,
+      "exit_code": 0
+    }
+  },
+  "limits": [
+    "GGUF is read-only at v0.1; screen compares tensor presence and shape, never values.",
+    "screen opens one .gguf file; split GGUF sets are not supported.",
+    "Values survive as slices only: added and removed tensor names carry no bytes.",
+    "The demo edit is a byte-level slice rewrite, not a behavioral tuning run; no benchmark claim is made."
+  ]
+}

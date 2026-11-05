@@ -76,33 +76,21 @@ weightpatch --version
 
 ## Quickstart
 
-This runs on a BF16 safetensors directory at the 0.6B scale. Any local BF16 checkpoint takes the same path. So that the output can be reproduced line by line, the demo uses a synthetic 4-tensor fixture whose names and shapes come from Qwen3-0.6B.
+This walks through the real Qwen3-0.6B. Any local BF16 checkpoint takes the same path; swap the directory names. First fetch the base: the single-file BF16 safetensors of `Qwen/Qwen3-0.6B`, about 1.5 GB.
 
-First make an "edited" copy: flip one bit in the first 64 rows of two tensors.
+```bash
+mkdir -p Qwen3-0.6B
+curl -fL -o Qwen3-0.6B/model.safetensors \
+  https://huggingface.co/Qwen/Qwen3-0.6B/resolve/main/model.safetensors
+```
 
-```python
-import shutil
-from pathlib import Path
+Then make an "edited" copy with the example script in this repo: copy the directory, then rewrite the first 64 rows of two tensors in raw BF16 words, flipping one bit in every word. No randomness and no float decoding, so the same base bytes always produce the same post-edit digests:
 
-import numpy as np
-
-from weightpatch import Checkpoint
-
-base, edited = Path("Qwen3-0.6B"), Path("Qwen3-0.6B-neurons")
-shutil.copytree(base, edited, dirs_exist_ok=True)
-
-for name in (
-    "model.layers.0.self_attn.q_proj.weight",
-    "model.layers.12.mlp.down_proj.weight",
-):
-    with Checkpoint(edited) as checkpoint:
-        info = checkpoint.tensor(name)
-        rows = [[0, 0, 64], [1, 0, info.shape[1]]]
-        words = checkpoint.read_slab(name, rows).copy()
-    words ^= np.uint16(0x0080)  # flip one bit in every BF16 word
-    with info.file.open("r+b") as handle:
-        handle.seek(info.offset)  # rows 0-63 are contiguous
-        handle.write(words.tobytes())
+```bash
+python examples/make_demo_edit.py ./Qwen3-0.6B ./Qwen3-0.6B-neurons
+# Qwen3-0.6B-neurons: 311 tensors
+#   model.layers.0.self_attn.q_proj.weight  BF16 2048×1024  rows 0:64  sha256 574ebe3b4fcb427b
+#   model.layers.12.mlp.down_proj.weight  BF16 1024×3072  rows 0:64  sha256 b603bbfe2b46e3b9
 ```
 
 Then record, review, apply and revert:
@@ -117,18 +105,19 @@ weightpatch revert ./rebuilt   qwen3-0.6b-neurons.wpatch -o ./back
 cmp ./Qwen3-0.6B/model.safetensors ./back/model.safetensors && echo "revert is byte-identical"
 ```
 
-`apply` and `revert` write only the tensor shards (plus `model.safetensors.index.json` when it exists). Non-weight files such as `config.json` and the tokenizer are not copied; the weights are the contract.
-
-On the demo fixture, the `diff` output is the list of changed tensors, not a dump of both models:
+The `diff` output is the list of changed tensors, not a dump of both models:
 
 ```
 tensor                                  dtype      shape  slice                before    after
-model.layers.0.self_attn.q_proj.weight  BF16   2048×1024  [0:0:64] [1:0:1024]  d60fe4d8  3369ebd6
-model.layers.12.mlp.down_proj.weight    BF16   1024×3072  [0:0:64] [1:0:3072]  dd3f83f2  be3fb25d
-2 changed · 2 unchanged · 0 added · 0 removed
+model.layers.0.self_attn.q_proj.weight  BF16   2048×1024  [0:0:64] [1:0:1024]  7592f6e7  574ebe3b
+model.layers.12.mlp.down_proj.weight    BF16   1024×3072  [0:0:64] [1:0:3072]  75228753  b603bbfe
+2 changed · 309 unchanged · 0 added · 0 removed
+patch   qwen3-0.6b-neurons.wpatch · d0722f8616bc
 ```
 
-A real checkpoint produces the same changed rows, with a few hundred under `unchanged`.
+`309 unchanged` is the rest of Qwen3-0.6B, untouched. After `apply` and then `revert`, `back/model.safetensors` is byte-identical to the base and `cmp` prints nothing. The patch id is `d0722f8616bcfc05a80870389ddbf6b279895c4f2eabe12f8fcd0124ea6741dd`; rerunning on the same inputs produces the same id.
+
+`apply` and `revert` write only the tensor shards (plus `model.safetensors.index.json` when it exists). Non-weight files such as `config.json` and the tokenizer are not copied; the weights are the contract.
 
 For a cross-base application, point the first argument at a different directory that still holds the same pre-image. To stack a second edit, `diff` the applied directory against its next state, then use `stack`.
 
@@ -136,17 +125,19 @@ For a cross-base application, point the first argument at a different directory 
 
 ![weightpatch diff, then screen](assets/demo.svg)
 
-This recording is a real run, not a drawing:
+The recording above is a real terminal run: the base is `Qwen/Qwen3-0.6B` BF16 safetensors (311 tensors, 1,503,300,328 bytes), and the downstream artifact is the single-file `Qwen3-0.6B-Q8_0.gguf` (Q8_0, 639,446,688 bytes) from `Qwen/Qwen3-0.6B-GGUF`. No synthetic fixture, no locally forged GGUF.
 
-1. `diff` finds two BF16 slice edits and writes the patch `8e03e6697c2a`.
-2. `screen` reads `general.architecture=qwen3` from the single-file GGUF, maps `model.layers.0.self_attn.q_proj.weight` to `blk.0.attn_q.weight` through the GGML name table, then reverses the GGUF `ne` order `1024×2048` back to `2048×1024` and confirms the shape.
+1. `diff` finds two BF16 slice edits (`2 changed · 309 unchanged`) and writes patch `d0722f8616bc`.
+2. `screen` reads `general.architecture=qwen3` and maps `model.layers.0.self_attn.q_proj.weight` to `blk.0.attn_q.weight` and `model.layers.12.mlp.down_proj.weight` to `blk.12.ffn_down.weight` through the GGML name table, then reverses the GGUF `ne` order: `1024×2048 → 2048×1024` and `3072×1024 → 1024×3072`.
 3. The verdict is `2 kept · 0 missing · 0 reshaped`, exit code 0.
 
-The data behind the recording is a locally generated Qwen3-0.6B-shaped fixture (4 tensors, 2 slice edits, a locally built Q8_0 GGUF); no model was downloaded. The Python snippet above is its input. Digests differ on real weights; the commands and the decision path are the same.
+The commands, full output, input file sha256 values, dependency versions and the bounds of that run are recorded in [`docs/demo-results.json`](./docs/demo-results.json); rerunning the commands in this README reproduces the same output.
 
-Take any single-file GGUF — for example `Qwen3-0.6B-Q8_0.gguf` from `Qwen/Qwen3-0.6B-GGUF` — and run your own patch against it:
+Run your own patch against your own single-file GGUF. This quantized export is a single file of about 639 MB from `Qwen/Qwen3-0.6B-GGUF`:
 
 ```bash
+curl -fL -o Qwen3-0.6B-Q8_0.gguf \
+  https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf
 weightpatch screen ./Qwen3-0.6B-Q8_0.gguf qwen3-0.6b-neurons.wpatch
 ```
 
@@ -213,7 +204,7 @@ Not built, and not promised on a schedule:
 - Carrying bytes for `added` / `removed` tensors so those patches can be applied.
 - Three-way merge and interactive conflict resolution.
 
-The next targets for validation on real derivatives are an expert-pruned DeepSeek-V4.1-Flash build, an edited Qwen3.5-0.8B, and an abliterated Kimi K3. The v0.1 tests and the demo run on offline synthetic fixtures, and this README does not pretend otherwise.
+The next targets for validation on real derivatives are an expert-pruned DeepSeek-V4.1-Flash build, an edited Qwen3.5-0.8B, and an abliterated Kimi K3. The tests run on offline fixtures in a temporary directory and need no network; the demo and every number above come from the real Qwen3-0.6B and the real Q8_0 GGUF, recorded in `docs/demo-results.json`.
 
 ## License
 

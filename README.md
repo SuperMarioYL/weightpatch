@@ -76,33 +76,21 @@ weightpatch --version
 
 ## 快速开始
 
-下面这套跑在一个 0.6B 级别的 BF16 safetensors 目录上。任意本地 BF16 checkpoint 都走同一条路径；为了让输出可以逐行复现，演示用 4 个张量的合成夹具，张量名和形状取自 Qwen3-0.6B。
+下面用真实的 Qwen3-0.6B 走一遍。任意本地 BF16 checkpoint 都走同一条路径，换掉目录名即可。先拿到 base：`Qwen/Qwen3-0.6B` 的单文件 BF16 safetensors，约 1.5 GB。
 
-先造一份「被编辑过」的副本：把两个张量的前 64 行各翻转一个 bit。
+```bash
+mkdir -p Qwen3-0.6B
+curl -fL -o Qwen3-0.6B/model.safetensors \
+  https://huggingface.co/Qwen/Qwen3-0.6B/resolve/main/model.safetensors
+```
 
-```python
-import shutil
-from pathlib import Path
+再用仓库里的示例脚本造一份「被编辑过」的副本：复制目录，然后把两个张量的前 64 行按原始 BF16 机器字重写，每个 word 翻一位。没有随机数，也没有浮点解码，同一份 base 永远得到同一份改后摘要：
 
-import numpy as np
-
-from weightpatch import Checkpoint
-
-base, edited = Path("Qwen3-0.6B"), Path("Qwen3-0.6B-neurons")
-shutil.copytree(base, edited, dirs_exist_ok=True)
-
-for name in (
-    "model.layers.0.self_attn.q_proj.weight",
-    "model.layers.12.mlp.down_proj.weight",
-):
-    with Checkpoint(edited) as checkpoint:
-        info = checkpoint.tensor(name)
-        rows = [[0, 0, 64], [1, 0, info.shape[1]]]
-        words = checkpoint.read_slab(name, rows).copy()
-    words ^= np.uint16(0x0080)  # 每个 BF16 word 翻一位
-    with info.file.open("r+b") as handle:
-        handle.seek(info.offset)  # 前 64 行是连续的
-        handle.write(words.tobytes())
+```bash
+python examples/make_demo_edit.py ./Qwen3-0.6B ./Qwen3-0.6B-neurons
+# Qwen3-0.6B-neurons: 311 tensors
+#   model.layers.0.self_attn.q_proj.weight  BF16 2048×1024  rows 0:64  sha256 574ebe3b4fcb427b
+#   model.layers.12.mlp.down_proj.weight  BF16 1024×3072  rows 0:64  sha256 b603bbfe2b46e3b9
 ```
 
 然后记录、审阅、应用、回滚：
@@ -117,18 +105,19 @@ weightpatch revert ./rebuilt   qwen3-0.6b-neurons.wpatch -o ./back
 cmp ./Qwen3-0.6B/model.safetensors ./back/model.safetensors && echo "revert is byte-identical"
 ```
 
-`apply` 和 `revert` 的输出目录只写张量分片（以及存在的 `model.safetensors.index.json`）；`config.json`、tokenizer 这类非权重文件不会被复制，权重是补丁的契约。
-
-在演示夹具上，`diff` 的输出就是被改动的张量列表，不是两份模型的全文：
+`diff` 的输出是改动列表，不是两份模型的全文：
 
 ```
 tensor                                  dtype      shape  slice                before    after
-model.layers.0.self_attn.q_proj.weight  BF16   2048×1024  [0:0:64] [1:0:1024]  d60fe4d8  3369ebd6
-model.layers.12.mlp.down_proj.weight    BF16   1024×3072  [0:0:64] [1:0:3072]  dd3f83f2  be3fb25d
-2 changed · 2 unchanged · 0 added · 0 removed
+model.layers.0.self_attn.q_proj.weight  BF16   2048×1024  [0:0:64] [1:0:1024]  7592f6e7  574ebe3b
+model.layers.12.mlp.down_proj.weight    BF16   1024×3072  [0:0:64] [1:0:3072]  75228753  b603bbfe
+2 changed · 309 unchanged · 0 added · 0 removed
+patch   qwen3-0.6b-neurons.wpatch · d0722f8616bc
 ```
 
-真实 checkpoint 上的改动行相同，只是 `unchanged` 的计数会有几百。
+`309 unchanged` 是 Qwen3-0.6B 里另外那 309 个没动过的张量。`apply` 之后再 `revert`，`back/model.safetensors` 与 base 逐字节相同，`cmp` 不输出任何内容。补丁 id 是 `d0722f8616bcfc05a80870389ddbf6b279895c4f2eabe12f8fcd0124ea6741dd`；同样的输入重跑，得到同一个 id。
+
+`apply` 和 `revert` 的输出目录只写张量分片（以及存在的 `model.safetensors.index.json`）；`config.json`、tokenizer 这类非权重文件不会被复制，权重是补丁的契约。
 
 想做一次跨 base 的应用，就把 `./Qwen3-0.6B` 换成另一个仍持有相同 pre-image 的目录；想叠第二个改动，就在应用后的目录上再 `diff` 一次，然后 `stack`。
 
@@ -136,17 +125,19 @@ model.layers.12.mlp.down_proj.weight    BF16   1024×3072  [0:0:64] [1:0:3072]  
 
 ![weightpatch diff, then screen](assets/demo.svg)
 
-这段录制来自一次真实运行，不是手绘的示意图：
+上图是真实运行的终端录制：base 是 `Qwen/Qwen3-0.6B` 的 BF16 safetensors（311 个张量、1,503,300,328 字节），下游产物是 `Qwen/Qwen3-0.6B-GGUF` 里的单文件 `Qwen3-0.6B-Q8_0.gguf`（Q8_0、639,446,688 字节）。没有合成夹具，也没有本地伪造的 GGUF。
 
-1. `diff` 找到两处 BF16 切片改动，并写出 8e03e6697c2a 这个补丁。
-2. `screen` 读取单文件 GGUF 的 `general.architecture=qwen3`，用 GGML 名称表把 `model.layers.0.self_attn.q_proj.weight` 映射到 `blk.0.attn_q.weight`，再把 GGUF 的 `ne` 顺序 `1024×2048` 反转回 `2048×1024`，确认形状一致。
+1. `diff` 找到两处 BF16 切片改动（`2 changed · 309 unchanged`），写出补丁 `d0722f8616bc`。
+2. `screen` 读 `general.architecture=qwen3`，用 GGML 名称表把 `model.layers.0.self_attn.q_proj.weight` 映射到 `blk.0.attn_q.weight`、把 `model.layers.12.mlp.down_proj.weight` 映射到 `blk.12.ffn_down.weight`；再把 GGUF 的 `ne` 顺序反转回来：`1024×2048 → 2048×1024`、`3072×1024 → 1024×3072`。
 3. 结论是 `2 kept · 0 missing · 0 reshaped`，退出码 0。
 
-录制用的数据是本地合成的 Qwen3-0.6B 形状夹具（4 个张量、2 处切片编辑、本地构建的 Q8_0 GGUF），没有下载模型；上面的 Python 片段就是它的输入。真实权重上跑出来的摘要会不同，命令和判定路径完全一样。
+命令、完整输出、输入文件的 sha256、依赖版本和这次运行的边界都记在 [`docs/demo-results.json`](./docs/demo-results.json)；照着本文的命令重跑，得到的是同一份输出。
 
-拿一个单文件 GGUF（例如 `Qwen/Qwen3-0.6B-GGUF` 里的 `Qwen3-0.6B-Q8_0.gguf`）对自己的补丁跑：
+拿自己的补丁对自己的单文件 GGUF 跑。同一次量化导出来自 `Qwen/Qwen3-0.6B-GGUF`，单文件、约 639 MB：
 
 ```bash
+curl -fL -o Qwen3-0.6B-Q8_0.gguf \
+  https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf
 weightpatch screen ./Qwen3-0.6B-Q8_0.gguf qwen3-0.6b-neurons.wpatch
 ```
 
@@ -213,7 +204,7 @@ v0.1.0 已经能用的是本文描述的全部内容：`diff`、`show`、`apply`
 - 为 `added` / `removed` 张量携带字节，让这类补丁也能应用。
 - 三方合并与交互式冲突解决。
 
-下一批想在真实 derivative 上验证的目标是 DeepSeek-V4.1-Flash 的去专家件、Qwen3.5-0.8B 的编辑件和 Kimi K3 的消融件。v0.1 的测试和演示都跑在离线合成夹具上，这一点在本文里没有含糊。
+下一批想在真实 derivative 上验证的目标是 DeepSeek-V4.1-Flash 的去专家件、Qwen3.5-0.8B 的编辑件和 Kimi K3 的消融件。测试跑在临时目录里的离线夹具上，不需要联网；本文的演示与所有数字来自真实的 Qwen3-0.6B 和真实的 Q8_0 GGUF，记录在 `docs/demo-results.json`。
 
 ## License
 
