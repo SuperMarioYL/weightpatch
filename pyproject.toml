@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "weightpatch"
+version = "0.1.0"
+description = "Sparse, reviewable patch files for edited open-weight checkpoints"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [{ name = "SuperMarioYL" }]
+keywords = ["safetensors", "gguf", "checkpoint", "diff", "patch", "llm"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Version Control",
+]
+dependencies = [
+  "safetensors>=0.4",
+  "numpy>=1.26",
+  "typer>=0.12",
+  "gguf>=0.10",
+  "rich>=13",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.2"]
+
+[project.scripts]
+weightpatch = "weightpatch.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/weightpatch"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
